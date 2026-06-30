@@ -1,0 +1,6 @@
+{
+  "name": "Compra Inteligente",
+  "description": "Plataforma B2B para restaurantes, mercados e panificadoras compararem preços de fornecedores e economizarem em suas compras.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
