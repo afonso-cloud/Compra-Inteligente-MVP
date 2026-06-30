@@ -38,7 +38,7 @@ import {
   ShoppingBag
 } from 'lucide-react';
 import { supabaseConfig, UserSession } from '../services/auth';
-import { fetchProducts } from '../services/supabaseData';
+import { addManualSupplier, fetchProducts } from '../services/supabaseData';
 
 // Define Interface matching Supabase 'supplier_products'
 export interface SupplierProduct {
@@ -207,6 +207,13 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [supplierFormOpen, setSupplierFormOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [newSupplierLocation, setNewSupplierLocation] = useState('Maringa - PR');
+  const [newSupplierUrl, setNewSupplierUrl] = useState('');
+  const [newSupplierCatalog, setNewSupplierCatalog] = useState('');
+  const [supplierSaving, setSupplierSaving] = useState(false);
+  const [supplierSaveResult, setSupplierSaveResult] = useState<string | null>(null);
 
   // Notifications Array
   const notifications = [
@@ -248,6 +255,42 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
     setIsDemoMode(true);
     setError(null);
     setLoading(false);
+  };
+
+  const handleCreateManualSupplier = async () => {
+    if (!newSupplierName.trim()) {
+      alert('Informe o nome do fornecedor.');
+      return;
+    }
+
+    setSupplierSaving(true);
+    setSupplierSaveResult(null);
+
+    try {
+      const result = await addManualSupplier({
+        supplierName: newSupplierName,
+        locationLabel: newSupplierLocation,
+        catalogUrl: newSupplierUrl,
+        catalogText: newSupplierCatalog
+      });
+
+      setProducts(prev => {
+        const byKey = new Map<string, SupplierProduct>();
+        [...prev, ...result.products].forEach(product => byKey.set(product.product_key, product));
+        return Array.from(byKey.values());
+      });
+      setSelectedSupplier(newSupplierName.trim());
+      setSupplierSaveResult(result.message);
+      setNewSupplierName('');
+      setNewSupplierUrl('');
+      setNewSupplierCatalog('');
+      setSupplierFormOpen(false);
+      setRawActiveTab('inicio');
+    } catch (err: any) {
+      setSupplierSaveResult(err?.message || 'Nao foi possivel cadastrar o fornecedor.');
+    } finally {
+      setSupplierSaving(false);
+    }
   };
 
   // Format money to BRL
@@ -1218,6 +1261,15 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
           {/* TAB: FORNECEDORES DIRECTORY */}
           {!loading && !error && activeTab === 'fornecedores' && (
             <div className="p-6 space-y-5 animate-in fade-in duration-300">
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setSupplierFormOpen(prev => !prev)}
+                  className="px-4 py-2.5 bg-[#009B4E] hover:bg-[#007A3D] text-white rounded-xl text-xs font-extrabold shadow-md shadow-green-500/10 transition-all flex items-center justify-center space-x-2 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Adicionar fornecedor</span>
+                </button>
+              </div>
               <div className="space-y-1">
                 <h2 className="text-lg font-extrabold text-[#0F172A] flex items-center">
                   <Users className="w-5 h-5 text-[#009B4E] mr-1.5" />
@@ -1226,7 +1278,63 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                 <p className="text-xs text-[#64748B] font-medium">Veja informações de contato e áreas de atuação de atacadistas.</p>
               </div>
 
-              <div className="space-y-3">
+              {supplierSaveResult && (
+                <div className="p-3 bg-green-50 border border-green-200 rounded-2xl text-[11px] font-bold text-[#007A3D] leading-relaxed">
+                  {supplierSaveResult}
+                </div>
+              )}
+
+              {supplierFormOpen && (
+                <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 shadow-xs space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div>
+                      <h3 className="text-sm font-extrabold text-[#0F172A] flex items-center">
+                        <Building2 className="w-4 h-4 text-[#009B4E] mr-1.5" />
+                        Novo fornecedor manual
+                      </h3>
+                      <p className="text-[11px] text-[#64748B] font-semibold mt-0.5">
+                        Cole um catalogo simples ou deixe vazio para gerar produtos iniciais automaticamente.
+                      </p>
+                    </div>
+                    <button onClick={() => setSupplierFormOpen(false)} className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <label className="space-y-1">
+                      <span className="text-[10px] font-extrabold text-slate-500 uppercase">Fornecedor</span>
+                      <input value={newSupplierName} onChange={(e) => setNewSupplierName(e.target.value)} placeholder="Ex: Distribuidora Maringa" className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-[#0F172A] outline-none focus:border-[#009B4E] focus:bg-white" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-[10px] font-extrabold text-slate-500 uppercase">Regiao</span>
+                      <input value={newSupplierLocation} onChange={(e) => setNewSupplierLocation(e.target.value)} placeholder="Maringa - PR" className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-[#0F172A] outline-none focus:border-[#009B4E] focus:bg-white" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-[10px] font-extrabold text-slate-500 uppercase">Link do catalogo</span>
+                      <input value={newSupplierUrl} onChange={(e) => setNewSupplierUrl(e.target.value)} placeholder="https://..." className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-[#0F172A] outline-none focus:border-[#009B4E] focus:bg-white" />
+                    </label>
+                  </div>
+
+                  <label className="space-y-1 block">
+                    <span className="text-[10px] font-extrabold text-slate-500 uppercase">Produtos do fornecedor</span>
+                    <textarea value={newSupplierCatalog} onChange={(e) => setNewSupplierCatalog(e.target.value)} rows={6} placeholder={'Farinha de trigo 25kg; 69,90; Saco 25kg; Mercearia\nQueijo mussarela kg; 36,90; Kg; Laticinios\nMolho de tomate sache 2kg; 14,90; Un; Mercearia'} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-[#0F172A] outline-none focus:border-[#009B4E] focus:bg-white resize-none leading-relaxed" />
+                    <span className="text-[10px] text-slate-500 font-semibold block">
+                      Formato aceito: produto; preco; unidade; categoria. Se ficar vazio, o sistema cria um catalogo inicial automaticamente.
+                    </span>
+                  </label>
+
+                  <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+                    <button onClick={() => setSupplierFormOpen(false)} className="px-4 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-extrabold text-slate-600 transition-colors">Cancelar</button>
+                    <button onClick={handleCreateManualSupplier} disabled={supplierSaving} className="px-4 py-2.5 bg-[#009B4E] hover:bg-[#007A3D] disabled:bg-slate-300 text-white rounded-xl text-xs font-extrabold shadow-md shadow-green-500/10 transition-all flex items-center justify-center space-x-2 cursor-pointer">
+                      {supplierSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+                      <span>{supplierSaving ? 'Cadastrando...' : 'Cadastrar e gerar produtos'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-3 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3 lg:space-y-0">
                 {uniqueSuppliers.map(sup => (
                   <div key={sup} className="p-4 bg-white border border-[#E2E8F0] rounded-2xl shadow-xs space-y-3">
                     <div className="flex items-center space-x-3">

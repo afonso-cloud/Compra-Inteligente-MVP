@@ -582,12 +582,213 @@ const getRuntimeSupabaseConfig = () => {
   };
 };
 
+const MANUAL_PRODUCTS_STORAGE_KEY = 'compra-inteligente-manual-products';
+
+export interface ManualSupplierInput {
+  supplierName: string;
+  locationLabel?: string;
+  catalogUrl?: string;
+  catalogText?: string;
+}
+
+export interface ManualSupplierResult {
+  products: SupplierProduct[];
+  persistedToSupabase: boolean;
+  message: string;
+}
+
+const defaultManualCatalog = [
+  'Farinha de trigo 25kg; 69,90; Saco 25kg; Mercearia',
+  'Queijo mussarela kg; 36,90; Kg; Laticinios',
+  'Molho de tomate sache 2kg; 14,90; Un; Mercearia',
+  'Oleo de soja 900ml; 6,59; Un; Mercearia',
+  'Acucar refinado 5kg; 19,90; Pct; Mercearia',
+  'Arroz branco 5kg; 24,90; Pct; Mercearia',
+  'Carne bovina kg; 40,50; Kg; Acougue',
+  'Frango kg; 12,80; Kg; Acougue',
+  'Presunto kg; 26,50; Kg; Frios',
+  'Bacon kg; 27,90; Kg; Frios',
+  'Pao de hamburguer pct; 11,50; Pct; Padaria',
+  'Refrigerante cola 2L; 7,49; Un; Bebidas'
+];
+
+const categoryImages: Record<string, string> = {
+  mercearia: 'https://images.unsplash.com/photo-1574323347407-f5e1ad6d020b?auto=format&fit=crop&q=80&w=240',
+  laticinios: 'https://images.unsplash.com/photo-1486297678162-eb2a19b0a32d?auto=format&fit=crop&q=80&w=240',
+  acougue: 'https://images.unsplash.com/photo-1607623814075-e51df1bdc82f?auto=format&fit=crop&q=80&w=240',
+  frios: 'https://images.unsplash.com/photo-1529692236671-f1f6cf9683ba?auto=format&fit=crop&q=80&w=240',
+  padaria: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&q=80&w=240',
+  bebidas: 'https://images.unsplash.com/photo-1544145945-f90425340c7e?auto=format&fit=crop&q=80&w=240'
+};
+
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || 'fornecedor';
+
+const parseMoney = (value: string | undefined, fallback: number) => {
+  if (!value) return fallback;
+  const clean = value.replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.');
+  const parsed = Number(clean);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const inferCategory = (name: string, explicit?: string) => {
+  if (explicit) return explicit.trim();
+  const lower = name.toLowerCase();
+  if (/queijo|leite|mussarela|requeijao|iogurte/.test(lower)) return 'Laticinios';
+  if (/carne|bovina|frango|coxa|acougue/.test(lower)) return 'Acougue';
+  if (/presunto|bacon|calabresa|frios/.test(lower)) return 'Frios';
+  if (/pao|hamburguer|padaria/.test(lower)) return 'Padaria';
+  if (/refrigerante|suco|agua|bebida/.test(lower)) return 'Bebidas';
+  return 'Mercearia';
+};
+
+const parseCatalogLines = (catalogText?: string) => {
+  const sourceLines = (catalogText?.trim() ? catalogText.split(/\r?\n/) : defaultManualCatalog)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  return sourceLines.map((line, index) => {
+    const parts = line.includes(';') || line.includes('|') || line.includes('\t')
+      ? line.split(/[;|\t]/).map(part => part.trim())
+      : line.split(',').map(part => part.trim());
+
+    const moneyMatches = line.match(/\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:[.,]\d{1,2})?/g);
+    const priceText = parts[1] || moneyMatches?.[moneyMatches.length - 1];
+    const name = (parts[0] || 'Produto manual ' + (index + 1)).replace(/\s+R?\$?\s*\d+([,.]\d+)?$/, '').trim();
+    const price = parseMoney(priceText, 10 + index);
+    const unit = parts[2] || 'Un';
+    const category = inferCategory(name, parts[3]);
+
+    return { name, price, unit, category };
+  });
+};
+
+const getLocalManualProducts = (): SupplierProduct[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(MANUAL_PRODUCTS_STORAGE_KEY);
+    if (!raw) return [];
+    const rows = JSON.parse(raw);
+    return Array.isArray(rows) ? rows.map(normalizeSupplierProduct) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveLocalManualProducts = (products: SupplierProduct[]) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(MANUAL_PRODUCTS_STORAGE_KEY, JSON.stringify(products));
+};
+
+const mergeUniqueProducts = (base: SupplierProduct[], incoming: SupplierProduct[]) => {
+  const byKey = new Map<string, SupplierProduct>();
+  [...base, ...incoming].forEach(product => byKey.set(product.product_key, product));
+  return Array.from(byKey.values());
+};
+
+const buildManualSupplierProducts = (input: ManualSupplierInput): SupplierProduct[] => {
+  const supplier = input.supplierName.trim();
+  const supplierSlug = slugify(supplier);
+  const capturedAt = new Date().toISOString();
+
+  return parseCatalogLines(input.catalogText).map((item, index) => {
+    const productSlug = slugify(item.name);
+    const regularPrice = Math.round(item.price * 1.08 * 100) / 100;
+    const categoryKey = slugify(item.category);
+
+    return {
+      product_key: `manual-${supplierSlug}-${productSlug}-${index + 1}`,
+      source: 'manual',
+      supplier,
+      store_id: supplierSlug,
+      store_slug: supplierSlug,
+      location_label: input.locationLabel || 'Maringa - PR',
+      aisle: item.category,
+      product_id: `${supplierSlug}-${index + 1}`,
+      master_product_id: productSlug,
+      name: item.name,
+      description: `Produto cadastrado manualmente para o fornecedor ${supplier}.`,
+      category_name: item.category,
+      unit_type: item.unit,
+      price_brl: item.price,
+      real_price_brl: regularPrice,
+      discount_fraction: regularPrice > item.price ? (regularPrice - item.price) / regularPrice : 0,
+      have_discount: regularPrice > item.price,
+      in_stock: true,
+      is_available: true,
+      stock: 100,
+      image_url: categoryImages[categoryKey] || categoryImages.mercearia,
+      product_url: input.catalogUrl,
+      captured_at: capturedAt
+    } as SupplierProduct;
+  });
+};
+
+export const addManualSupplier = async (input: ManualSupplierInput): Promise<ManualSupplierResult> => {
+  const supplierName = input.supplierName.trim();
+  if (!supplierName) {
+    throw new Error('Informe o nome do fornecedor.');
+  }
+
+  const generatedProducts = buildManualSupplierProducts({ ...input, supplierName });
+  const localProducts = mergeUniqueProducts(getLocalManualProducts(), generatedProducts);
+  saveLocalManualProducts(localProducts);
+
+  const { supabaseUrl, supabaseKey } = getRuntimeSupabaseConfig();
+  if (!supabaseUrl || !supabaseKey) {
+    return {
+      products: generatedProducts,
+      persistedToSupabase: false,
+      message: 'Fornecedor salvo localmente. Configure uma RPC segura para gravar no Supabase.'
+    };
+  }
+
+  try {
+    const endpoint = supabaseUrl.replace(/\/$/, '') + '/rest/v1/supplier_products?on_conflict=product_key';
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        apikey: supabaseKey,
+        Authorization: 'Bearer ' + supabaseKey,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=representation'
+      },
+      body: JSON.stringify(generatedProducts)
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail.slice(0, 180));
+    }
+
+    const rows = await response.json();
+    return {
+      products: Array.isArray(rows) && rows.length > 0 ? rows.map(normalizeSupplierProduct) : generatedProducts,
+      persistedToSupabase: true,
+      message: `${generatedProducts.length} produtos cadastrados no Supabase.`
+    };
+  } catch (err) {
+    console.warn('Manual supplier persisted locally only:', err);
+    return {
+      products: generatedProducts,
+      persistedToSupabase: false,
+      message: `${generatedProducts.length} produtos foram cadastrados nesta sessao. O Supabase recusou escrita publica; use uma RPC/admin backend para persistencia definitiva.`
+    };
+  }
+};
+
 export const fetchProducts = async (): Promise<SupplierProduct[]> => {
   const { supabaseUrl, supabaseKey } = getRuntimeSupabaseConfig();
+  const manualProducts = getLocalManualProducts();
 
   if (!supabaseUrl || !supabaseKey) {
     console.warn('Supabase public config missing. Falling back to demo database.');
-    return demoSupplierProducts;
+    return mergeUniqueProducts(demoSupplierProducts, manualProducts);
   }
 
   try {
@@ -620,13 +821,13 @@ export const fetchProducts = async (): Promise<SupplierProduct[]> => {
 
     if (allRows.length === 0) {
       console.info('Table supplier_products is empty, falling back to demo database.');
-      return demoSupplierProducts;
+      return mergeUniqueProducts(demoSupplierProducts, manualProducts);
     }
 
-    return allRows.map(normalizeSupplierProduct);
+    return mergeUniqueProducts(allRows.map(normalizeSupplierProduct), manualProducts);
   } catch (err) {
     console.error('Exception fetching supplier_products from Supabase REST, fallback to demo:', err);
-    return demoSupplierProducts;
+    return mergeUniqueProducts(demoSupplierProducts, manualProducts);
   }
 };
 
