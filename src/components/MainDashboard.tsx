@@ -384,9 +384,9 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
   const timelineEvents = getTimelineEvents();
 
   return (
-    <div className="w-full min-h-screen bg-slate-100 flex items-center justify-center p-0 md:p-4">
-      {/* Mobile-style Shell for premium focus layout */}
-      <div id="pwa_shell" className="w-full max-w-[480px] h-screen md:h-[850px] md:rounded-[40px] md:shadow-2xl md:border-8 md:border-[#0F172A] bg-white relative flex flex-col overflow-hidden select-none scrollbar-none">
+    <div className="w-full min-h-screen bg-slate-100 lg:bg-[#F8FAFC] flex items-center justify-center lg:items-stretch lg:justify-start p-0 md:p-4 lg:p-0">
+      {/* Mobile PWA shell becomes a full desktop workspace on large screens */}
+      <div id="pwa_shell" className="w-full max-w-[480px] lg:max-w-none h-screen md:h-[850px] lg:h-auto lg:min-h-screen md:rounded-[40px] lg:rounded-none md:shadow-2xl lg:shadow-none md:border-8 lg:border-0 md:border-[#0F172A] bg-white lg:bg-[#F8FAFC] relative flex flex-col overflow-hidden lg:overflow-visible select-none scrollbar-none">
         
         {/* TOP STATUS ROW */}
         <div className="bg-gradient-to-r from-[#009B4E] to-[#007A3D] px-6 pt-6 pb-4 text-white flex items-center justify-between shadow-md relative z-10">
@@ -536,7 +536,7 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
         )}
 
         {/* CORE CONTAINER SCROLLABLE AREA */}
-        <div id="pwa_content" className="flex-1 overflow-y-auto pb-24">
+        <div id="pwa_content" className="flex-1 overflow-y-auto lg:overflow-visible pb-24 lg:pb-10 lg:w-full lg:max-w-[1440px] lg:mx-auto">
           
           {/* SKELETON LOADING STATE */}
           {loading && (
@@ -634,10 +634,10 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
 
           {/* MAIN TAB: INICIO */}
           {!loading && !error && products.length > 0 && activeTab === 'inicio' && (
-            <div className="space-y-5 animate-in fade-in duration-300">
+            <div className="space-y-5 lg:space-y-7 lg:py-6 animate-in fade-in duration-300">
               
               {/* WELCOME BANNER SECTION */}
-              <div className="px-6 pt-5 flex justify-between items-start">
+              <div className="px-6 pt-5 lg:pt-0 flex justify-between items-start">
                 <div className="space-y-0.5">
                   <h2 className="text-xl font-extrabold text-[#0F172A]">Olá, Bella Massa Pizzaria 👋</h2>
                   <p className="text-xs text-[#64748B] font-semibold">Compare preços e aumente sua margem de lucro.</p>
@@ -822,7 +822,7 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                   <span className="text-[10px] font-bold text-[#64748B] uppercase">{uniqueSuppliers.length} Fornecedores</span>
                 </div>
 
-                <div className="px-6 space-y-4">
+                <div className="px-6 space-y-4 lg:space-y-0 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4">
                   {uniqueSuppliers.map(supName => {
                     const sProducts = productsBySupplier[supName]?.slice(0, 3) || [];
                     if (sProducts.length === 0) return null;
@@ -1268,7 +1268,7 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
         </div>
 
         {/* BOTTOM NAVIGATION TAB BAR */}
-        <div id="pwa_bottom_nav" className="absolute bottom-0 left-0 right-0 bg-white border-t border-[#E2E8F0] h-20 px-4 flex items-center justify-around z-30 shadow-2xl md:rounded-b-[32px]">
+        <div id="pwa_bottom_nav" className="absolute bottom-0 left-0 right-0 bg-white border-t border-[#E2E8F0] h-20 px-4 flex lg:hidden items-center justify-around z-30 shadow-2xl md:rounded-b-[32px]">
           
           <button 
             onClick={() => setActiveTab('inicio')}
