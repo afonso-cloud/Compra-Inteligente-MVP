@@ -597,6 +597,12 @@ export interface ManualSupplierResult {
   message: string;
 }
 
+export interface ProductsFetchResult {
+  products: SupplierProduct[];
+  source: 'supabase' | 'demo' | 'mixed';
+  message: string;
+}
+
 const defaultManualCatalog = [
   'Farinha de trigo 25kg; 69,90; Saco 25kg; Mercearia',
   'Queijo mussarela kg; 36,90; Kg; Laticinios',
@@ -782,13 +788,17 @@ export const addManualSupplier = async (input: ManualSupplierInput): Promise<Man
   }
 };
 
-export const fetchProducts = async (): Promise<SupplierProduct[]> => {
+export const fetchProductsWithMeta = async (): Promise<ProductsFetchResult> => {
   const { supabaseUrl, supabaseKey } = getRuntimeSupabaseConfig();
   const manualProducts = getLocalManualProducts();
 
   if (!supabaseUrl || !supabaseKey) {
     console.warn('Supabase public config missing. Falling back to demo database.');
-    return mergeUniqueProducts(demoSupplierProducts, manualProducts);
+    return {
+      products: mergeUniqueProducts(demoSupplierProducts, manualProducts),
+      source: manualProducts.length > 0 ? 'mixed' : 'demo',
+      message: 'Sem credenciais publicas do Supabase; exibindo catalogo demo/local.'
+    };
   }
 
   try {
@@ -821,14 +831,31 @@ export const fetchProducts = async (): Promise<SupplierProduct[]> => {
 
     if (allRows.length === 0) {
       console.info('Table supplier_products is empty, falling back to demo database.');
-      return mergeUniqueProducts(demoSupplierProducts, manualProducts);
+      return {
+        products: mergeUniqueProducts(demoSupplierProducts, manualProducts),
+        source: manualProducts.length > 0 ? 'mixed' : 'demo',
+        message: 'Supabase conectado, mas sem produtos; exibindo catalogo demo/local.'
+      };
     }
 
-    return mergeUniqueProducts(allRows.map(normalizeSupplierProduct), manualProducts);
+    return {
+      products: mergeUniqueProducts(allRows.map(normalizeSupplierProduct), manualProducts),
+      source: manualProducts.length > 0 ? 'mixed' : 'supabase',
+      message: `${allRows.length} produtos reais carregados do Supabase.`
+    };
   } catch (err) {
     console.error('Exception fetching supplier_products from Supabase REST, fallback to demo:', err);
-    return mergeUniqueProducts(demoSupplierProducts, manualProducts);
+    return {
+      products: mergeUniqueProducts(demoSupplierProducts, manualProducts),
+      source: manualProducts.length > 0 ? 'mixed' : 'demo',
+      message: 'Falha ao consultar Supabase; exibindo catalogo demo/local.'
+    };
   }
+};
+
+export const fetchProducts = async (): Promise<SupplierProduct[]> => {
+  const result = await fetchProductsWithMeta();
+  return result.products;
 };
 
 export const searchProducts = async (query: string): Promise<SupplierProduct[]> => {

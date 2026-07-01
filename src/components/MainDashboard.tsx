@@ -11,6 +11,10 @@ import {
   TrendingUp, 
   ShieldCheck, 
   Users, 
+  Store,
+  Upload,
+  Image,
+  Video,
   MapPin, 
   Clock, 
   Star, 
@@ -38,7 +42,7 @@ import {
   ShoppingBag
 } from 'lucide-react';
 import { supabaseConfig, UserSession } from '../services/auth';
-import { addManualSupplier, fetchProducts } from '../services/supabaseData';
+import { addManualSupplier, fetchProductsWithMeta } from '../services/supabaseData';
 
 // Define Interface matching Supabase 'supplier_products'
 export interface SupplierProduct {
@@ -64,6 +68,7 @@ export interface SupplierProduct {
   image_url?: string;
   product_url?: string;
   captured_at?: string;
+  source?: string;
 }
 
 interface MainDashboardProps {
@@ -180,9 +185,10 @@ const fallbackProducts: SupplierProduct[] = [
 
 export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashboardProps) {
   // Navigation
-  const [activeTab, setRawActiveTab] = useState<'inicio' | 'comparar' | 'lista' | 'historico' | 'fornecedores'>('inicio');
+  type DashboardTab = 'inicio' | 'comparar' | 'lista' | 'historico' | 'fornecedores' | 'painelFornecedor';
+  const [activeTab, setRawActiveTab] = useState<DashboardTab>('inicio');
   
-  const setActiveTab = (tab: 'inicio' | 'comparar' | 'lista' | 'historico' | 'fornecedores') => {
+  const setActiveTab = (tab: DashboardTab) => {
     if (tab === 'comparar' && onNavigateComparar) {
       onNavigateComparar();
     } else {
@@ -195,6 +201,8 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
+  const [dataSourceKind, setDataSourceKind] = useState<'supabase' | 'mixed' | 'demo'>('demo');
+  const [dataSourceMessage, setDataSourceMessage] = useState('');
 
   // Search & Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -214,6 +222,11 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
   const [newSupplierCatalog, setNewSupplierCatalog] = useState('');
   const [supplierSaving, setSupplierSaving] = useState(false);
   const [supplierSaveResult, setSupplierSaveResult] = useState<string | null>(null);
+  const [selectedStoreSupplier, setSelectedStoreSupplier] = useState<string | null>(null);
+  const [supplierDiscountCategory, setSupplierDiscountCategory] = useState('Mercearia');
+  const [supplierDiscountItem, setSupplierDiscountItem] = useState('');
+  const [supplierDiscountPercent, setSupplierDiscountPercent] = useState(10);
+  const [supplierStoryType, setSupplierStoryType] = useState<'Foto' | 'Video'>('Foto');
 
   // Notifications Array
   const notifications = [
@@ -228,14 +241,19 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
     setError(null);
 
     try {
-      const data = await fetchProducts();
+      const result = await fetchProductsWithMeta();
+      const data = result.products;
 
       if (!data || data.length === 0) {
         setProducts([]);
         setIsDemoMode(false);
+        setDataSourceKind(result.source);
+        setDataSourceMessage(result.message);
       } else {
         setProducts(data);
-        setIsDemoMode(false);
+        setIsDemoMode(result.source === 'demo');
+        setDataSourceKind(result.source);
+        setDataSourceMessage(result.message);
       }
     } catch (err: any) {
       console.error('Erro ao carregar supplier_products:', err);
@@ -253,6 +271,8 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
   const activateDemoMode = () => {
     setProducts(fallbackProducts);
     setIsDemoMode(true);
+    setDataSourceKind('demo');
+    setDataSourceMessage('Catalogo de simulacao carregado manualmente.');
     setError(null);
     setLoading(false);
   };
@@ -397,6 +417,62 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
     return acc;
   }, {});
 
+  const offerProducts = filteredProducts
+    .filter(p => getDiscountPercent(p) > 0 || p.have_discount || p.real_price_brl !== p.price_brl)
+    .sort((a, b) => getDiscountPercent(b) - getDiscountPercent(a))
+    .slice(0, 12);
+
+  const supplierStories = uniqueSuppliers.map((sup, index) => {
+    const supplierProducts = productsBySupplier[sup] || [];
+    const featureProduct = supplierProducts.find(p => getDiscountPercent(p) > 0) || supplierProducts[0];
+    return {
+      supplier: sup,
+      count: supplierProducts.length,
+      mediaType: index % 3 === 0 ? 'Video' : 'Foto',
+      image: featureProduct?.image_url,
+      discount: featureProduct ? getDiscountPercent(featureProduct) : 0
+    };
+  });
+
+  const storeProducts = selectedStoreSupplier ? productsBySupplier[selectedStoreSupplier] || [] : [];
+  const storeOfferProducts = storeProducts.filter(p => getDiscountPercent(p) > 0).slice(0, 6);
+
+  const openSupplierStore = (supplier: string) => {
+    setSelectedStoreSupplier(supplier);
+    setSelectedSupplier(supplier);
+    setRawActiveTab('inicio');
+  };
+
+  const applySupplierDiscount = () => {
+    const discount = Math.max(1, Math.min(80, Number(supplierDiscountPercent) || 1));
+    const targetSupplier = selectedStoreSupplier || newSupplierName || uniqueSuppliers[0];
+
+    if (!targetSupplier) {
+      alert('Escolha um fornecedor para aplicar desconto.');
+      return;
+    }
+
+    setProducts(prev => prev.map(product => {
+      const matchesSupplier = product.supplier === targetSupplier;
+      const matchesCategory = !supplierDiscountItem && (product.category_name || '').toLowerCase().includes(supplierDiscountCategory.toLowerCase());
+      const matchesItem = supplierDiscountItem && product.name.toLowerCase().includes(supplierDiscountItem.toLowerCase());
+
+      if (!matchesSupplier || (!matchesCategory && !matchesItem)) return product;
+
+      const basePrice = product.real_price_brl && product.real_price_brl > product.price_brl ? product.real_price_brl : product.price_brl;
+      const discountedPrice = Math.round(basePrice * (1 - discount / 100) * 100) / 100;
+      return {
+        ...product,
+        price_brl: discountedPrice,
+        real_price_brl: basePrice,
+        discount_fraction: discount / 100,
+        have_discount: true,
+        captured_at: new Date().toISOString()
+      };
+    }));
+    alert(`Desconto de ${discount}% aplicado para ${targetSupplier}.`);
+  };
+
   // Generate timeline opportunities dynamically
   const getTimelineEvents = () => {
     const events: { title: string, desc: string, date: string, type: 'discount' | 'new' }[] = [];
@@ -445,11 +521,11 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
           <div className="flex items-center space-x-3.5">
             {/* Supabase status circle indicator */}
             <div 
-              className={`flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[9px] font-extrabold border uppercase ${!isDemoMode && products.length > 0 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}`}
-              title={!isDemoMode && products.length > 0 ? "Conectado ao Supabase Real" : "Modo de Demonstração / Sem Supabase"}
+              className={`flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[9px] font-extrabold border uppercase ${dataSourceKind === 'supabase' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : dataSourceKind === 'mixed' ? 'bg-blue-500/20 text-blue-200 border-blue-400/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}`}
+              title={dataSourceMessage || 'Origem dos precos'}
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${!isDemoMode && products.length > 0 ? 'bg-emerald-400' : 'bg-amber-400'} inline-block animate-pulse`}></span>
-              <span>{!isDemoMode && products.length > 0 ? "Real" : "Demo"}</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${dataSourceKind === 'supabase' ? 'bg-emerald-400' : dataSourceKind === 'mixed' ? 'bg-blue-300' : 'bg-amber-400'} inline-block animate-pulse`}></span>
+              <span>{dataSourceKind === 'supabase' ? 'Real' : dataSourceKind === 'mixed' ? 'Misto' : 'Demo'}</span>
             </div>
 
             {/* Notifications Button */}
@@ -553,6 +629,13 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                   >
                     <History className="w-4 h-4" />
                     <span>Histórico de Cotações</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('painelFornecedor'); setProfileOpen(false); }}
+                    className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition-all flex items-center space-x-3 ${activeTab === 'painelFornecedor' ? 'bg-green-50 text-[#007A3D]' : 'text-slate-700 hover:bg-slate-50'}`}
+                  >
+                    <Store className="w-4 h-4" />
+                    <span>Painel do Fornecedor</span>
                   </button>
                 </div>
 
@@ -694,6 +777,21 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                 </button>
               </div>
 
+              <div className="px-6">
+                <div className="rounded-2xl border border-slate-200 bg-white p-3 flex items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Database className="w-4 h-4 text-[#009B4E] flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-black text-[#0F172A] uppercase">Origem dos precos</p>
+                      <p className="text-[11px] text-[#64748B] font-semibold truncate">{dataSourceMessage || 'Consultando catalogo de fornecedores.'}</p>
+                    </div>
+                  </div>
+                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase border ${dataSourceKind === 'supabase' ? 'bg-green-50 text-[#007A3D] border-green-200' : dataSourceKind === 'mixed' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                    {dataSourceKind === 'supabase' ? 'Real' : dataSourceKind === 'mixed' ? 'Misto' : 'Demo'}
+                  </span>
+                </div>
+              </div>
+
               {/* SEARCH BAR WITH BARCODE SCANNER */}
               <div className="px-6">
                 <div className="relative">
@@ -719,6 +817,67 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                   </button>
                 </div>
               </div>
+
+              {/* SUPPLIER STORIES */}
+              <div className="px-6 space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-sm text-[#0F172A]">Lojas em destaque</h3>
+                  <button onClick={() => setActiveTab('fornecedores')} className="text-[10px] font-black text-[#009B4E]">Cadastrar fornecedor</button>
+                </div>
+                <div className="flex items-center gap-3 overflow-x-auto scrollbar-none pb-1">
+                  {supplierStories.map(story => (
+                    <button
+                      key={story.supplier}
+                      onClick={() => openSupplierStore(story.supplier)}
+                      className="flex-shrink-0 w-20 text-center space-y-1.5 cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 mx-auto rounded-full p-0.5 bg-gradient-to-br from-[#009B4E] via-emerald-400 to-yellow-300 shadow-sm">
+                        <div className="w-full h-full rounded-full bg-white p-1 overflow-hidden flex items-center justify-center">
+                          {story.image ? <img src={story.image} alt={story.supplier} className="w-full h-full object-cover rounded-full" /> : <span className="text-xs font-black text-[#007A3D]">{getInitials(story.supplier)}</span>}
+                        </div>
+                      </div>
+                      <span className="block text-[10px] font-extrabold text-[#0F172A] truncate group-hover:text-[#007A3D]">{story.supplier}</span>
+                      <span className="block text-[9px] font-bold text-slate-400">{story.mediaType}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {selectedStoreSupplier && (
+                <div className="px-6">
+                  <div className="rounded-3xl overflow-hidden bg-[#0F172A] text-white shadow-lg border border-slate-900">
+                    <div className="p-5 bg-gradient-to-br from-[#043927] via-[#006B3C] to-[#009B4E]">
+                      <button onClick={() => setSelectedStoreSupplier(null)} className="mb-4 text-[10px] font-black bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-full">Voltar para todos</button>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-widest font-black text-green-100">Loja oficial</p>
+                          <h2 className="text-2xl font-black leading-tight">{selectedStoreSupplier}</h2>
+                          <p className="text-xs text-green-50 font-semibold mt-1">{storeProducts.length} produtos disponiveis • entrega e retirada sob consulta</p>
+                        </div>
+                        <div className="w-14 h-14 rounded-2xl bg-white text-[#007A3D] flex items-center justify-center font-black shadow-md">{getInitials(selectedStoreSupplier)}</div>
+                      </div>
+                    </div>
+                    <div className="p-4 bg-white text-[#0F172A] space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-black">Ofertas do encarte</h3>
+                        <span className="text-[10px] font-black text-[#007A3D]">{storeOfferProducts.length || storeProducts.slice(0, 6).length} itens</span>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+                        {(storeOfferProducts.length ? storeOfferProducts : storeProducts.slice(0, 6)).map(prod => (
+                          <button key={prod.product_key} onClick={() => setSelectedProduct(prod)} className="text-left bg-slate-50 hover:bg-green-50 border border-slate-200 hover:border-green-200 rounded-2xl p-3 space-y-2 transition-all">
+                            <div className="h-20 bg-white rounded-xl flex items-center justify-center overflow-hidden">
+                              {prod.image_url ? <img src={prod.image_url} alt={prod.name} className="max-h-full max-w-full object-contain" /> : <ShoppingBag className="w-8 h-8 text-slate-300" />}
+                            </div>
+                            <p className="text-[11px] font-black line-clamp-2 min-h-[28px]">{prod.name}</p>
+                            <p className="text-sm font-black text-[#007A3D]">{formatBRL(prod.price_brl)}</p>
+                            <span className="inline-flex text-[9px] font-black text-white bg-[#009B4E] rounded-full px-2 py-0.5">Adicionar</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* BARCODE SCANNER MOCK OVERLAY */}
               {scannerOpen && (
@@ -855,6 +1014,39 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                 </div>
               )}
 
+              {offerProducts.length > 0 && (
+                <div className="px-6 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-extrabold text-sm text-[#0F172A] flex items-center">
+                      <Percent className="w-4 h-4 text-[#009B4E] mr-1.5" />
+                      Encartes em oferta
+                    </h3>
+                    <span className="text-[10px] font-black text-[#64748B] uppercase">Precos de vitrine</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
+                    {offerProducts.map(prod => (
+                      <button
+                        key={prod.product_key}
+                        onClick={() => setSelectedProduct(prod)}
+                        className="bg-white border border-slate-200 hover:border-green-200 rounded-2xl p-3 text-left shadow-xs hover:shadow-md transition-all space-y-2"
+                      >
+                        <div className="h-24 bg-slate-50 rounded-xl flex items-center justify-center overflow-hidden relative">
+                          {prod.image_url ? <img src={prod.image_url} alt={prod.name} className="max-h-full max-w-full object-contain" /> : <ShoppingBag className="w-8 h-8 text-slate-300" />}
+                          {getDiscountPercent(prod) > 0 && (
+                            <span className="absolute top-2 left-2 bg-red-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full">{getDiscountPercent(prod)}% OFF</span>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-black text-[#0F172A] line-clamp-2 min-h-[30px]">{prod.name}</p>
+                          <p className="text-[10px] font-bold text-[#64748B] truncate">{prod.supplier}</p>
+                          <p className="text-sm font-black text-[#007A3D]">{formatBRL(prod.price_brl)}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* SUPPLIERS DYNAMIC OFFERS SECTION */}
               <div className="space-y-4">
                 <div className="px-6 flex justify-between items-center">
@@ -891,12 +1083,11 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                           
                           <button 
                             onClick={() => {
-                              setSelectedSupplier(supName);
-                              setActiveTab('comparar');
+                              openSupplierStore(supName);
                             }}
                             className="text-[10px] font-extrabold text-[#009B4E] hover:text-[#007A3D] transition-colors"
                           >
-                            Ver todas as ofertas
+                            Entrar na loja
                           </button>
                         </div>
 
@@ -953,7 +1144,7 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                     return (
                       <div 
                         key={sup} 
-                        onClick={() => { setSelectedSupplier(sup); setActiveTab('comparar'); }}
+                        onClick={() => openSupplierStore(sup)}
                         className="bg-slate-50 hover:bg-green-50 border border-slate-200 hover:border-green-200 p-3.5 rounded-2xl flex items-center space-x-3 flex-shrink-0 cursor-pointer min-w-[210px] transition-all group"
                       >
                         <div className="w-10 h-10 rounded-full bg-green-100 text-[#007A3D] border border-green-200 flex items-center justify-center font-black text-xs shadow-xs group-hover:scale-105 transition-transform">
@@ -1204,6 +1395,106 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
 
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB: PAINEL FORNECEDOR */}
+          {!loading && !error && activeTab === 'painelFornecedor' && (
+            <div className="p-6 space-y-5 animate-in fade-in duration-300">
+              <div className="space-y-1">
+                <h2 className="text-lg font-extrabold text-[#0F172A] flex items-center">
+                  <Store className="w-5 h-5 text-[#009B4E] mr-1.5" />
+                  Painel de gestao do fornecedor
+                </h2>
+                <p className="text-xs text-[#64748B] font-medium">Atualize catalogo, precos, encartes, stories e descontos da sua loja.</p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-2xl p-4 shadow-xs space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div>
+                      <h3 className="text-sm font-black text-[#0F172A]">Upload em lote do catalogo</h3>
+                      <p className="text-[11px] text-[#64748B] font-semibold">Cole CSV, planilha simples ou grupo de produtos para atualizar de uma vez.</p>
+                    </div>
+                    <Upload className="w-5 h-5 text-[#009B4E]" />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <span className="text-[10px] font-black uppercase text-slate-500">Fornecedor / loja</span>
+                      <input value={newSupplierName} onChange={(e) => setNewSupplierName(e.target.value)} placeholder="Nome da loja atacadista" className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-[#009B4E]" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-[10px] font-black uppercase text-slate-500">Link de encarte ou ERP</span>
+                      <input value={newSupplierUrl} onChange={(e) => setNewSupplierUrl(e.target.value)} placeholder="URL do encarte, planilha ou API" className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-[#009B4E]" />
+                    </label>
+                  </div>
+
+                  <textarea value={newSupplierCatalog} onChange={(e) => setNewSupplierCatalog(e.target.value)} rows={8} placeholder={'Produto; Preco; Unidade; Categoria\nFarinha de trigo 25kg; 69,90; Saco 25kg; Mercearia\nQueijo mussarela kg; 36,90; Kg; Laticinios'} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#009B4E] resize-none leading-relaxed" />
+
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <button onClick={handleCreateManualSupplier} disabled={supplierSaving} className="flex-1 bg-[#009B4E] hover:bg-[#007A3D] disabled:bg-slate-300 text-white py-3 rounded-xl font-black text-xs flex items-center justify-center gap-2">
+                      {supplierSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+                      <span>Atualizar catalogo e precos</span>
+                    </button>
+                    <button onClick={() => alert('Integracao ERP/API agendada: crie um webhook no n8n para receber produto, preco, estoque e categoria deste fornecedor.')} className="flex-1 bg-slate-900 hover:bg-slate-800 text-white py-3 rounded-xl font-black text-xs flex items-center justify-center gap-2">
+                      <ArrowRight className="w-4 h-4" />
+                      <span>Conectar ERP/API</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 shadow-xs space-y-4">
+                  <h3 className="text-sm font-black text-[#0F172A]">Stories e encarte</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => setSupplierStoryType('Foto')} className={`py-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1 ${supplierStoryType === 'Foto' ? 'bg-green-50 text-[#007A3D] border-green-200' : 'bg-white text-slate-500 border-slate-200'}`}>
+                      <Image className="w-4 h-4" />
+                      Foto
+                    </button>
+                    <button onClick={() => setSupplierStoryType('Video')} className={`py-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1 ${supplierStoryType === 'Video' ? 'bg-green-50 text-[#007A3D] border-green-200' : 'bg-white text-slate-500 border-slate-200'}`}>
+                      <Video className="w-4 h-4" />
+                      Video
+                    </button>
+                  </div>
+                  <div className="p-4 bg-slate-50 border border-dashed border-slate-300 rounded-2xl text-center space-y-2">
+                    <Upload className="w-7 h-7 text-slate-400 mx-auto" />
+                    <p className="text-[11px] font-bold text-slate-500">Area preparada para subir {supplierStoryType.toLowerCase()} do encarte e aparecer nos baloes de story.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 shadow-xs space-y-4">
+                  <h3 className="text-sm font-black text-[#0F172A] flex items-center"><Percent className="w-4 h-4 text-[#009B4E] mr-1.5" />Desconto por categoria ou item</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <input value={supplierDiscountCategory} onChange={(e) => setSupplierDiscountCategory(e.target.value)} placeholder="Categoria" className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-[#009B4E]" />
+                    <input value={supplierDiscountItem} onChange={(e) => setSupplierDiscountItem(e.target.value)} placeholder="Item especifico opcional" className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-[#009B4E]" />
+                    <input type="number" value={supplierDiscountPercent} onChange={(e) => setSupplierDiscountPercent(Number(e.target.value))} min={1} max={80} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-[#009B4E]" />
+                  </div>
+                  <button onClick={applySupplierDiscount} className="w-full py-3 bg-[#009B4E] hover:bg-[#007A3D] text-white rounded-xl text-xs font-black">Aplicar desconto agora</button>
+                </div>
+
+                <div className="bg-[#0F172A] text-white rounded-2xl p-4 shadow-xs space-y-3">
+                  <h3 className="text-sm font-black">Perguntas para cadastro de fornecedor</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-200 font-semibold">
+                    {[
+                      'Razao social e nome fantasia',
+                      'CNPJ, inscricao estadual e contato fiscal',
+                      'Endereco de retirada e regioes atendidas',
+                      'Entrega propria, terceirizada ou apenas retirada?',
+                      'Pedido minimo, prazo e taxa de entrega',
+                      'Categorias vendidas e marcas principais',
+                      'Tabela de preco por atacado ou varejo',
+                      'Tem encarte semanal com fotos/videos?',
+                      'Aceita pedido pelo app, WhatsApp ou ERP?',
+                      'Politica de estoque, troca e faturamento'
+                    ].map(question => (
+                      <div key={question} className="p-2.5 bg-white/5 border border-white/10 rounded-xl">{question}</div>
+                    ))}
+                  </div>
+                  <button onClick={() => setActiveTab('fornecedores')} className="w-full bg-white text-[#0F172A] py-3 rounded-xl text-xs font-black">Cadastrar como fornecedor</button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1497,6 +1788,39 @@ export function MainDashboard({ user, onLogout, onNavigateComparar }: MainDashbo
                 <div className="col-span-2 border-t border-slate-200 pt-2.5 flex justify-between items-center text-[10px] text-[#64748B] font-bold">
                   <span>Embalagem: {selectedProduct.unit_type || 'Unidade'}</span>
                   <span>Coleta: {selectedProduct.captured_at ? new Date(selectedProduct.captured_at).toLocaleDateString('pt-BR') : 'Recente'}</span>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-[#0F172A] flex items-center">
+                    <Store className="w-4 h-4 text-[#009B4E] mr-1.5" />
+                    Mais itens deste fornecedor
+                  </h4>
+                  <button
+                    onClick={() => {
+                      openSupplierStore(selectedProduct.supplier);
+                      setSelectedProduct(null);
+                    }}
+                    className="text-[10px] font-black text-[#009B4E]"
+                  >
+                    Entrar na loja
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {(productsBySupplier[selectedProduct.supplier] || [])
+                    .filter(prod => prod.product_key !== selectedProduct.product_key)
+                    .slice(0, 4)
+                    .map(prod => (
+                      <button
+                        key={prod.product_key}
+                        onClick={() => setSelectedProduct(prod)}
+                        className="p-2 bg-white border border-slate-200 rounded-xl hover:border-green-200 hover:bg-green-50 text-left transition-all"
+                      >
+                        <span className="text-[10px] font-black text-[#0F172A] line-clamp-2 min-h-[28px]">{prod.name}</span>
+                        <span className="block text-[11px] font-black text-[#007A3D] mt-1">{formatBRL(prod.price_brl)}</span>
+                      </button>
+                    ))}
                 </div>
               </div>
 
